@@ -646,7 +646,7 @@ button {
 }
 
 .drawer-panel {
-  width: min(620px, 96vw);
+  width: min(760px, 96vw);
   background: var(--panel);
   color: var(--ink);
   height: 100%;
@@ -680,6 +680,11 @@ button {
   gap: 12px;
 }
 
+.form-grid.compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -701,6 +706,65 @@ button {
 
 .field.full {
   grid-column: 1 / -1;
+}
+
+.transform-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.transform-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 12px;
+}
+
+.transform-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: none;
+  font-weight: 400;
+}
+
+.transform-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 10px;
+}
+
+.transform-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.column-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(130px, 1.2fr) 100px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.column-row input,
+.column-row select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--ink);
+  padding: 8px 9px;
+}
+
+.empty-mini.light {
+  color: var(--muted);
+  border-color: var(--line);
 }
 
 .field label {
@@ -831,6 +895,11 @@ button {
 
   .form-grid,
   .palette {
+    grid-template-columns: 1fr;
+  }
+
+  .form-grid.compact,
+  .column-row {
     grid-template-columns: 1fr;
   }
 }

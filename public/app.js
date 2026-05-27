@@ -39,6 +39,12 @@
     ["manual", "Manual data"]
   ];
 
+  const transformTypes = [
+    ["freshness", "Freshness status"],
+    ["relative-time", "Relative time label"],
+    ["value-map", "Value map"]
+  ];
+
   document.addEventListener("click", onClick);
   document.addEventListener("input", onInput);
   document.addEventListener("change", onChange);
@@ -339,28 +345,55 @@
 
   function renderStatusTable(widget) {
     const rows = filteredRows(widget.sourceId);
+    const columns = statusTableColumns(widget);
     return `
       <table class="server-table">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Status</th>
-            <th>Uptime</th>
-            <th>Population</th>
+            ${columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("")}
           </tr>
         </thead>
         <tbody>
           ${rows.map((row) => `
             <tr>
-              <td><div class="server-name-cell"><span class="status-dot ${escapeAttr(row.status)}"></span><strong>${escapeHtml(row.name || row.id)}</strong></div></td>
-              <td><span class="status-pill"><span class="status-dot ${escapeAttr(row.status)}"></span>${escapeHtml(row.status || "unknown")}</span></td>
-              <td>${escapeHtml(row.uptime || "-")}</td>
-              <td>${escapeHtml(row.population || "-")}</td>
+              ${columns.map((column) => `<td>${renderStatusCell(row, column)}</td>`).join("")}
             </tr>
-          `).join("") || `<tr><td colspan="4">No rows match the current search.</td></tr>`}
+          `).join("") || `<tr><td colspan="${columns.length}">No rows match the current search.</td></tr>`}
         </tbody>
       </table>
     `;
+  }
+
+  function statusTableColumns(widget) {
+    const configured = widget.fieldConfig?.columns;
+    if (Array.isArray(configured) && configured.length) {
+      const columns = configured
+        .filter((column) => column && column.field)
+        .map((column) => ({
+          label: column.label || column.field,
+          field: column.field,
+          type: column.type || "text"
+        }));
+      if (columns.length) return columns;
+    }
+    return [
+      { label: "Name", field: "name", type: "name" },
+      { label: "Status", field: "status", type: "status" },
+      { label: "Uptime", field: "uptime", type: "text" },
+      { label: "Population", field: "population", type: "text" }
+    ];
+  }
+
+  function renderStatusCell(row, column) {
+    const value = getPath(row, column.field);
+    if (column.type === "name") {
+      return `<div class="server-name-cell"><span class="status-dot ${escapeAttr(row.status)}"></span><strong>${escapeHtml(value || row.name || row.id)}</strong></div>`;
+    }
+    if (column.type === "status") {
+      const status = value || row.status || "unknown";
+      return `<span class="status-pill"><span class="status-dot ${escapeAttr(status)}"></span>${escapeHtml(status)}</span>`;
+    }
+    return escapeHtml(displayValue(value));
   }
 
   function renderServersUp(widget) {
@@ -561,6 +594,9 @@
               <input name="fieldLastRestart" data-wizard value="${escapeAttr(form.fieldLastRestart)}" placeholder="lastRestart">
             </div>
             <div class="field full">
+              ${renderTransformEditor(form)}
+            </div>
+            <div class="field full">
               <label>Advanced config JSON</label>
               <textarea name="configJson" data-wizard spellcheck="false">${escapeHtml(form.configJson)}</textarea>
             </div>
@@ -646,6 +682,120 @@
       `;
     }
     return "";
+  }
+
+  function renderTransformEditor(form) {
+    const transforms = Array.isArray(form.transforms) ? form.transforms : [];
+    return `
+      <div class="transform-editor">
+        <div class="transform-head">
+          <div>
+            <label>Calculated fields</label>
+            <p>Derive status, age labels, or mapped values from source data before widgets render.</p>
+          </div>
+          <button class="btn small" data-action="add-transform" type="button">Add rule</button>
+        </div>
+        ${transforms.map((transform, index) => renderTransformCard(transform, index)).join("") || `<div class="empty-mini light">No calculated fields configured.</div>`}
+      </div>
+    `;
+  }
+
+  function renderTransformCard(transform, index) {
+    const type = transform.type || "freshness";
+    return `
+      <div class="transform-card">
+        <div class="transform-card-head">
+          <strong>Rule ${index + 1}</strong>
+          <button class="mini-action danger" data-remove-transform="${index}" type="button">Remove</button>
+        </div>
+        <div class="form-grid compact">
+          <div class="field">
+            <label>Rule type</label>
+            <select data-transform-field="type" data-transform-index="${index}">
+              ${transformTypes.map(([value, label]) => `<option value="${value}" ${value === type ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field">
+            <label>Source field</label>
+            <input data-transform-field="sourceField" data-transform-index="${index}" value="${escapeAttr(transform.sourceField)}" placeholder="last_reported_time">
+          </div>
+          ${renderTransformTypeFields(transform, index, type)}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderTransformTypeFields(transform, index, type) {
+    if (type === "freshness") {
+      return `
+        <div class="field">
+          <label>Status target</label>
+          <input data-transform-field="targetField" data-transform-index="${index}" value="${escapeAttr(transform.targetField || "status")}" placeholder="status">
+        </div>
+        <div class="field">
+          <label>Fresh seconds</label>
+          <input data-transform-field="maxAgeSeconds" data-transform-index="${index}" value="${escapeAttr(transform.maxAgeSeconds || 120)}" inputmode="numeric">
+        </div>
+        <div class="field">
+          <label>Fresh value</label>
+          <input data-transform-field="freshValue" data-transform-index="${index}" value="${escapeAttr(transform.freshValue || "up")}" placeholder="up">
+        </div>
+        <div class="field">
+          <label>Stale value</label>
+          <input data-transform-field="staleValue" data-transform-index="${index}" value="${escapeAttr(transform.staleValue || "down")}" placeholder="down">
+        </div>
+        <div class="field">
+          <label>Unknown value</label>
+          <input data-transform-field="unknownValue" data-transform-index="${index}" value="${escapeAttr(transform.unknownValue || "unknown")}" placeholder="unknown">
+        </div>
+        <div class="field">
+          <label>Age label field</label>
+          <input data-transform-field="ageLabelField" data-transform-index="${index}" value="${escapeAttr(transform.ageLabelField || "")}" placeholder="uptime">
+        </div>
+        <div class="field">
+          <label>Age seconds field</label>
+          <input data-transform-field="ageSecondsField" data-transform-index="${index}" value="${escapeAttr(transform.ageSecondsField || "")}" placeholder="lastResponseSeconds">
+        </div>
+        <div class="field">
+          <label>Epoch unit</label>
+          <select data-transform-field="epochUnit" data-transform-index="${index}">
+            ${["auto", "s", "ms"].map((unit) => `<option value="${unit}" ${unit === (transform.epochUnit || "auto") ? "selected" : ""}>${unit}</option>`).join("")}
+          </select>
+        </div>
+      `;
+    }
+    if (type === "relative-time") {
+      return `
+        <div class="field">
+          <label>Label target</label>
+          <input data-transform-field="targetField" data-transform-index="${index}" value="${escapeAttr(transform.targetField || "uptime")}" placeholder="uptime">
+        </div>
+        <div class="field">
+          <label>Age seconds field</label>
+          <input data-transform-field="ageSecondsField" data-transform-index="${index}" value="${escapeAttr(transform.ageSecondsField || "")}" placeholder="lastResponseSeconds">
+        </div>
+        <div class="field">
+          <label>Epoch unit</label>
+          <select data-transform-field="epochUnit" data-transform-index="${index}">
+            ${["auto", "s", "ms"].map((unit) => `<option value="${unit}" ${unit === (transform.epochUnit || "auto") ? "selected" : ""}>${unit}</option>`).join("")}
+          </select>
+        </div>
+      `;
+    }
+    return `
+      <div class="field">
+        <label>Target field</label>
+        <input data-transform-field="targetField" data-transform-index="${index}" value="${escapeAttr(transform.targetField || "")}" placeholder="status">
+      </div>
+      <div class="field full">
+        <label>Map JSON</label>
+        <textarea data-transform-field="mapJson" data-transform-index="${index}" spellcheck="false">${escapeHtml(transform.mapJson || prettyJson(transform.map || {}))}</textarea>
+      </div>
+      <div class="field">
+        <label>Default value</label>
+        <input data-transform-field="defaultValue" data-transform-index="${index}" value="${escapeAttr(transform.defaultValue || "")}" placeholder="unknown">
+      </div>
+    `;
   }
 
   function renderTestResult() {
@@ -749,6 +899,7 @@
                 ${sources.map((source) => `<option value="${escapeAttr(source.id)}" ${source.id === form.sourceId ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}
               </select>
             </div>
+            ${selectedType === "status-table" ? renderWidgetColumnEditor(form) : ""}
             <div class="field">
               <label>Grid X</label>
               <input name="x" data-editor value="${escapeAttr(form.x)}" inputmode="numeric">
@@ -783,6 +934,33 @@
           </div>
         </div>
       </section>
+    `;
+  }
+
+  function renderWidgetColumnEditor(form) {
+    const columns = Array.isArray(form.columns) ? form.columns : defaultStatusColumns();
+    return `
+      <div class="field full">
+        <div class="transform-editor">
+          <div class="transform-head">
+            <div>
+              <label>Status table columns</label>
+              <p>Pick the row fields and labels shown by this widget.</p>
+            </div>
+            <button class="btn small" data-action="add-column" type="button">Add column</button>
+          </div>
+          ${columns.map((column, index) => `
+            <div class="column-row">
+              <input data-column-field="label" data-column-index="${index}" value="${escapeAttr(column.label)}" placeholder="Label">
+              <input data-column-field="field" data-column-index="${index}" value="${escapeAttr(column.field)}" placeholder="field.path">
+              <select data-column-field="type" data-column-index="${index}">
+                ${["text", "name", "status"].map((type) => `<option value="${type}" ${type === (column.type || "text") ? "selected" : ""}>${type}</option>`).join("")}
+              </select>
+              <button class="mini-action danger" data-remove-column="${index}" type="button">Remove</button>
+            </div>
+          `).join("")}
+        </div>
+      </div>
     `;
   }
 
@@ -862,6 +1040,18 @@
       return;
     }
 
+    const removeTransformButton = event.target.closest("[data-remove-transform]");
+    if (removeTransformButton) {
+      removeTransform(Number(removeTransformButton.dataset.removeTransform));
+      return;
+    }
+
+    const removeColumnButton = event.target.closest("[data-remove-column]");
+    if (removeColumnButton) {
+      removeColumn(Number(removeColumnButton.dataset.removeColumn));
+      return;
+    }
+
     const editDashboardButton = event.target.closest("[data-edit-dashboard]");
     if (editDashboardButton) {
       openDashboardDrawer(editDashboardButton.dataset.editDashboard);
@@ -927,6 +1117,8 @@
       if (action === "discard") await discardEdits();
       if (action === "add-source") openSourceDrawer();
       if (action === "close-drawer") closeDrawer();
+      if (action === "add-transform") addTransform();
+      if (action === "add-column") addColumn();
       if (action === "test-source") await testSource();
       if (action === "save-source") saveSource();
       if (action === "remove-source") removeSource(state.wizard.sourceId);
@@ -963,6 +1155,14 @@
       sessionStorage.setItem("eq2dash:adminKey", state.adminKey);
       return;
     }
+    if (event.target.matches("[data-transform-field]")) {
+      updateTransformValue(event.target);
+      return;
+    }
+    if (event.target.matches("[data-column-field]")) {
+      updateColumnValue(event.target);
+      return;
+    }
     if (event.target.matches("[data-wizard]")) {
       updateFormValue(state.wizard.form, event.target);
       return;
@@ -973,6 +1173,15 @@
   }
 
   async function onChange(event) {
+    if (event.target.matches("[data-transform-field]")) {
+      updateTransformValue(event.target);
+      if (event.target.dataset.transformField === "type") render();
+      return;
+    }
+    if (event.target.matches("[data-column-field]")) {
+      updateColumnValue(event.target);
+      return;
+    }
     if (event.target.matches("[data-wizard]")) {
       updateFormValue(state.wizard.form, event.target);
       if (event.target.name === "type") render();
@@ -1090,6 +1299,7 @@
         y: String(widget.layout?.y || 1),
         w: String(widget.layout?.w || 3),
         h: String(widget.layout?.h || 2),
+        columns: normalizeColumns(widget.fieldConfig?.columns),
         optionsJson: prettyJson(widget.options || {}),
         fieldConfigJson: prettyJson(widget.fieldConfig || {})
       }
@@ -1126,6 +1336,52 @@
     state.drawer = null;
     state.editor = null;
     render();
+  }
+
+  function addTransform() {
+    state.wizard.form.transforms = state.wizard.form.transforms || [];
+    state.wizard.form.transforms.push(defaultTransform());
+    syncMappingJsonFromVisual();
+    render();
+  }
+
+  function removeTransform(index) {
+    if (!Array.isArray(state.wizard.form.transforms)) return;
+    state.wizard.form.transforms.splice(index, 1);
+    syncMappingJsonFromVisual();
+    render();
+  }
+
+  function updateTransformValue(target) {
+    const index = Number(target.dataset.transformIndex);
+    const field = target.dataset.transformField;
+    const transform = state.wizard.form.transforms?.[index];
+    if (!transform || !field) return;
+    transform[field] = target.value;
+    syncMappingJsonFromVisual();
+  }
+
+  function addColumn() {
+    state.editor.form.columns = state.editor.form.columns || [];
+    state.editor.form.columns.push({ label: "Column", field: "name", type: "text" });
+    syncFieldConfigJsonFromColumns();
+    render();
+  }
+
+  function removeColumn(index) {
+    if (!Array.isArray(state.editor?.form?.columns)) return;
+    state.editor.form.columns.splice(index, 1);
+    syncFieldConfigJsonFromColumns();
+    render();
+  }
+
+  function updateColumnValue(target) {
+    const index = Number(target.dataset.columnIndex);
+    const field = target.dataset.columnField;
+    const column = state.editor?.form?.columns?.[index];
+    if (!column || !field) return;
+    column[field] = target.value;
+    syncFieldConfigJsonFromColumns();
   }
 
   async function testSource() {
@@ -1203,17 +1459,21 @@
       population: text("fieldPopulation") || "population",
       lastRestart: text("fieldLastRestart") || "lastRestart"
     };
+    const mapping = {
+      ...rawMapping,
+      rootPath: text("rootPath"),
+      fields: mappingFields
+    };
+    if (!form.mappingJsonDirty) {
+      mapping.transforms = serializeTransforms(form.transforms || []);
+    }
     return {
       type,
       name: text("name") || sourceTypes.find(([value]) => value === type)?.[1] || "Untitled source",
       enabled: form.enabled !== false && form.enabled !== "false",
       refreshSeconds: Number(form.refreshSeconds || 30),
       config: { ...rawConfig, ...generatedConfig },
-      mapping: {
-        ...rawMapping,
-        rootPath: text("rootPath"),
-        fields: mappingFields
-      }
+      mapping
     };
   }
 
@@ -1309,6 +1569,9 @@
     const type = form.type || widgetTypes[0].type;
     const options = parseJsonInput(form.optionsJson, "Options JSON", {});
     const fieldConfig = parseJsonInput(form.fieldConfigJson, "Field config JSON", {});
+    if (type === "status-table" && !form.fieldConfigJsonDirty) {
+      fieldConfig.columns = serializeColumns(form.columns || []);
+    }
     if (type === "map-overlay" && !options.image) options.image = "/assets/norrath-map.svg";
     Object.assign(widget, {
       type,
@@ -1599,6 +1862,141 @@
   function updateFormValue(form, target) {
     if (!form || !target.name) return;
     form[target.name] = target.type === "checkbox" ? target.checked : target.value;
+    if (target.name === "mappingJson") form.mappingJsonDirty = true;
+    if (target.name === "fieldConfigJson") form.fieldConfigJsonDirty = true;
+  }
+
+  function syncMappingJsonFromVisual() {
+    if (!state.wizard?.form) return;
+    state.wizard.form.mappingJsonDirty = false;
+    let mapping;
+    try {
+      mapping = parseJsonInput(state.wizard.form.mappingJson, "Advanced mapping JSON", {});
+    } catch {
+      return;
+    }
+    mapping.transforms = serializeTransforms(state.wizard.form.transforms || []);
+    state.wizard.form.mappingJson = prettyJson(mapping);
+    const textarea = document.querySelector("textarea[name='mappingJson']");
+    if (textarea && document.activeElement !== textarea) textarea.value = state.wizard.form.mappingJson;
+  }
+
+  function syncFieldConfigJsonFromColumns() {
+    if (!state.editor?.form) return;
+    state.editor.form.fieldConfigJsonDirty = false;
+    let fieldConfig;
+    try {
+      fieldConfig = parseJsonInput(state.editor.form.fieldConfigJson, "Field config JSON", {});
+    } catch {
+      return;
+    }
+    fieldConfig.columns = serializeColumns(state.editor.form.columns || []);
+    state.editor.form.fieldConfigJson = prettyJson(fieldConfig);
+    const textarea = document.querySelector("textarea[name='fieldConfigJson']");
+    if (textarea && document.activeElement !== textarea) textarea.value = state.editor.form.fieldConfigJson;
+  }
+
+  function defaultTransform() {
+    return {
+      type: "freshness",
+      sourceField: "last_reported_time",
+      targetField: "status",
+      maxAgeSeconds: "120",
+      freshValue: "up",
+      staleValue: "down",
+      unknownValue: "unknown",
+      ageLabelField: "uptime",
+      ageSecondsField: "lastResponseSeconds",
+      epochUnit: "auto"
+    };
+  }
+
+  function normalizeTransform(transform = {}) {
+    return {
+      type: transform.type || transform.kind || "freshness",
+      sourceField: transform.sourceField || transform.field || "",
+      targetField: transform.targetField || "",
+      maxAgeSeconds: transform.maxAgeSeconds ?? "120",
+      freshValue: transform.freshValue ?? "up",
+      staleValue: transform.staleValue ?? "down",
+      unknownValue: transform.unknownValue ?? "unknown",
+      ageLabelField: transform.ageLabelField || "",
+      ageSecondsField: transform.ageSecondsField || "",
+      epochUnit: transform.epochUnit || transform.unit || "auto",
+      map: transform.map || {},
+      mapJson: prettyJson(transform.map || {}),
+      defaultValue: transform.defaultValue ?? ""
+    };
+  }
+
+  function serializeTransforms(transforms) {
+    return transforms
+      .map((transform) => {
+        const type = transform.type || "freshness";
+        const serialized = {
+          type,
+          sourceField: String(transform.sourceField || "").trim()
+        };
+        if (!serialized.sourceField) return null;
+        if (type === "freshness") {
+          serialized.targetField = String(transform.targetField || "status").trim();
+          serialized.maxAgeSeconds = Number(transform.maxAgeSeconds || 120);
+          serialized.freshValue = String(transform.freshValue || "up").trim();
+          serialized.staleValue = String(transform.staleValue || "down").trim();
+          serialized.unknownValue = String(transform.unknownValue || "unknown").trim();
+          if (transform.ageLabelField) serialized.ageLabelField = String(transform.ageLabelField).trim();
+          if (transform.ageSecondsField) serialized.ageSecondsField = String(transform.ageSecondsField).trim();
+          if (transform.epochUnit && transform.epochUnit !== "auto") serialized.epochUnit = transform.epochUnit;
+          return serialized;
+        }
+        if (type === "relative-time") {
+          serialized.targetField = String(transform.targetField || "uptime").trim();
+          if (transform.ageSecondsField) serialized.ageSecondsField = String(transform.ageSecondsField).trim();
+          if (transform.epochUnit && transform.epochUnit !== "auto") serialized.epochUnit = transform.epochUnit;
+          return serialized;
+        }
+        serialized.targetField = String(transform.targetField || "").trim();
+        serialized.map = parseJsonInput(transform.mapJson, "Map JSON", {});
+        if (transform.defaultValue !== "") serialized.defaultValue = transform.defaultValue;
+        return serialized.targetField ? serialized : null;
+      })
+      .filter(Boolean);
+  }
+
+  function defaultStatusColumns() {
+    return [
+      { label: "Name", field: "name", type: "name" },
+      { label: "Status", field: "status", type: "status" },
+      { label: "Uptime", field: "uptime", type: "text" },
+      { label: "Population", field: "population", type: "text" }
+    ];
+  }
+
+  function normalizeColumns(columns) {
+    const source = Array.isArray(columns) && columns.length ? columns : defaultStatusColumns();
+    return source.map((column) => ({
+      label: column.label || column.field || "Column",
+      field: column.field || "name",
+      type: column.type || "text"
+    }));
+  }
+
+  function serializeColumns(columns) {
+    return normalizeColumns(columns)
+      .filter((column) => column.field)
+      .map((column) => ({
+        label: String(column.label || column.field).trim(),
+        field: String(column.field).trim(),
+        type: column.type || "text"
+      }));
+  }
+
+  function getPath(value, path) {
+    if (!path) return value;
+    return String(path).split(".").reduce((current, part) => {
+      if (current === null || current === undefined) return undefined;
+      return current[part];
+    }, value);
   }
 
   function parseJsonInput(value, label, fallback = {}) {
@@ -1673,6 +2071,11 @@
     const mapping = source?.mapping || {};
     const fields = mapping.fields || {};
     const selectors = config.selectors || {};
+    const transforms = Array.isArray(mapping.transforms)
+      ? mapping.transforms
+      : Array.isArray(mapping.calculatedFields)
+        ? mapping.calculatedFields
+        : [];
     return {
       form: {
         type: source?.type || "json-rest",
@@ -1693,6 +2096,7 @@
         uptimeSelector: selectors.uptime || "",
         populationSelector: selectors.population || "",
         messageField: config.messageField || "message",
+        transforms: transforms.map(normalizeTransform),
         configJson: prettyJson(config),
         mappingJson: prettyJson(mapping)
       },

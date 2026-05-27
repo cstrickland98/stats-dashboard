@@ -53,9 +53,9 @@ Do not put private source URLs, API keys, passwords, or personal machine paths i
 2. View the seeded `EQ2 sample server status` dashboard.
 3. Enter the admin key in the top bar, then click `Edit`.
 4. Use `+ Source` to add JSON REST, HTML scrape, static JSON/CSV, WebSocket, or manual data.
-5. Test the source, map fields such as `name`, `status`, `uptime`, and `population`, then save the source locally.
+5. Test the source, map fields such as `name`, `status`, `uptime`, and `population`, and add calculated fields when source data needs transforms.
 6. Use sidebar edit/remove controls to change or delete dashboards, sources, and presets.
-7. Use `+ Widget` in edit mode to add tiles, then use each widget's `Edit` button to pick its source, dashboard, layout, options JSON, and field config JSON.
+7. Use `+ Widget` in edit mode to add tiles, then use each widget's `Edit` button to pick its source, dashboard, layout, visual table columns, options JSON, and field config JSON.
 8. Drag widget headers to rearrange tiles and resize from the lower-right corner.
 9. Click `Save` to publish the shared layout for everyone.
 10. Use `Export` and `Import` to back up or move dashboard JSON.
@@ -66,6 +66,7 @@ Do not put private source URLs, API keys, passwords, or personal machine paths i
 - HTML scraping uses backend CSS selectors, so it avoids browser CORS limits.
 - Static JSON/CSV and manual sources are stored centrally in SQLite.
 - WebSocket sources connect from the backend and buffer recent events.
+- Source mappings can include calculated field rules. A freshness rule can read an epoch or ISO timestamp, compare it to the current server time, set a target field such as `status`, and optionally write age fields such as `uptime: "1 minute ago"` and `lastResponseSeconds: 60`.
 
 ## Useful API
 

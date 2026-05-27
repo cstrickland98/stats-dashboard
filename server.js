@@ -532,14 +532,123 @@ function normalizeRows(raw, mapping = {}) {
   return rows.map((row, index) => {
     const normalized = { ...row };
     for (const [field, sourcePath] of Object.entries(fieldMap)) {
+      if (typeof sourcePath !== "string") continue;
       const value = getPath(row, sourcePath);
       if (value !== undefined) normalized[field] = value;
     }
+    applyTransforms(normalized, row, mapping);
     normalized.id =
       normalized.id || slugify(normalized.name || `row-${index + 1}`);
     normalized.status = normalizeStatus(normalized.status);
     return normalized;
   });
+}
+
+function applyTransforms(normalized, row, mapping = {}) {
+  const transforms = Array.isArray(mapping.transforms)
+    ? mapping.transforms
+    : Array.isArray(mapping.calculatedFields)
+      ? mapping.calculatedFields
+      : [];
+  for (const transform of transforms) {
+    if (!transform || typeof transform !== "object") continue;
+    const type = String(transform.type || transform.kind || "").toLowerCase();
+    if (type === "freshness" || type === "freshness-status") {
+      applyFreshnessTransform(normalized, row, transform);
+    } else if (type === "relative-time" || type === "age-label") {
+      applyRelativeTimeTransform(normalized, row, transform);
+    } else if (type === "value-map") {
+      applyValueMapTransform(normalized, row, transform);
+    }
+  }
+}
+
+function applyFreshnessTransform(normalized, row, transform) {
+  const targetField = transform.targetField || "status";
+  const timestamp = readTimestamp(normalized, row, transform);
+  if (timestamp === null) {
+    normalized[targetField] = transform.unknownValue ?? "unknown";
+    return;
+  }
+
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  const maxAgeSeconds = Number(transform.maxAgeSeconds ?? 120);
+  normalized[targetField] =
+    ageSeconds <= maxAgeSeconds
+      ? transform.freshValue ?? "up"
+      : transform.staleValue ?? "down";
+
+  if (transform.ageSecondsField) {
+    normalized[transform.ageSecondsField] = ageSeconds;
+  }
+  if (transform.ageLabelField) {
+    normalized[transform.ageLabelField] = formatRelativeAge(ageSeconds);
+  }
+}
+
+function applyRelativeTimeTransform(normalized, row, transform) {
+  const timestamp = readTimestamp(normalized, row, transform);
+  if (timestamp === null) return;
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (transform.targetField) {
+    normalized[transform.targetField] = formatRelativeAge(ageSeconds);
+  }
+  if (transform.ageSecondsField) {
+    normalized[transform.ageSecondsField] = ageSeconds;
+  }
+}
+
+function applyValueMapTransform(normalized, row, transform) {
+  const targetField = transform.targetField;
+  if (!targetField || !transform.map || typeof transform.map !== "object") {
+    return;
+  }
+  const value = readTransformValue(normalized, row, transform.sourceField);
+  const key = String(value ?? "");
+  if (Object.prototype.hasOwnProperty.call(transform.map, key)) {
+    normalized[targetField] = transform.map[key];
+  } else if (transform.defaultValue !== undefined) {
+    normalized[targetField] = transform.defaultValue;
+  }
+}
+
+function readTimestamp(normalized, row, transform) {
+  return parseTimestamp(
+    readTransformValue(normalized, row, transform.sourceField || transform.field),
+    transform.epochUnit || transform.unit,
+  );
+}
+
+function readTransformValue(normalized, row, sourceField) {
+  if (!sourceField) return undefined;
+  const normalizedValue = getPath(normalized, sourceField);
+  if (normalizedValue !== undefined) return normalizedValue;
+  return getPath(row, sourceField);
+}
+
+function parseTimestamp(value, unit = "auto") {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    if (unit === "ms" || (unit === "auto" && Math.abs(numeric) > 100000000000)) {
+      return numeric;
+    }
+    return numeric * 1000;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function formatRelativeAge(totalSeconds) {
+  const seconds = Math.max(0, Number(totalSeconds) || 0);
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${Math.floor(seconds)} seconds ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 function slugify(value) {

@@ -1,0 +1,23 @@
+{
+  "name": "eq2emu-dashboard",
+  "version": "0.1.0",
+  "description": "Centralized EQ2EMU stats and tracking dashboard.",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "12.10.0",
+    "chart.js": "4.5.1",
+    "cheerio": "1.2.0",
+    "express": "5.2.1",
+    "interactjs": "1.10.27",
+    "papaparse": "5.5.3",
+    "ws": "8.21.0"
+  }
+}

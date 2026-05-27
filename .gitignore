@@ -1,0 +1,10 @@
+node_modules/
+data/*.sqlite
+data/*.sqlite-*
+config/local.json
+config/*.local.json
+.serena/
+.env
+npm-debug.log*
+server*.log
+EQ2 Stats Wireframes _standalone_.html

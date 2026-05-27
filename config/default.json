@@ -1,0 +1,5 @@
+{
+  "port": 3000,
+  "databasePath": "data/eq2dash.sqlite",
+  "adminKey": ""
+}

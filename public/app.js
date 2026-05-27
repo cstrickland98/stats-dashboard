@@ -14,6 +14,8 @@
     drawer: null,
     wizard: createWizard(),
     editor: null,
+    pollTimer: null,
+    polling: false,
     toasts: [],
     charts: new Map()
   };
@@ -48,6 +50,7 @@
   document.addEventListener("click", onClick);
   document.addEventListener("input", onInput);
   document.addEventListener("change", onChange);
+  window.addEventListener("beforeunload", stopClientPolling);
 
   init();
 
@@ -56,6 +59,7 @@
       await loadConfig();
       await loadSourceData();
       render();
+      startClientPolling();
     } catch (error) {
       app.innerHTML = `<div class="boot"><div class="boot-mark"></div><div><h1>EQ2 Stats</h1><p>${escapeHtml(error.message)}</p></div></div>`;
     }
@@ -253,6 +257,11 @@
         <div class="toolbar">
           <input class="search" id="searchBox" type="search" value="${escapeAttr(state.search)}" placeholder="Search servers or widgets">
           <input class="admin-key" id="adminKey" type="password" value="${escapeAttr(state.adminKey)}" placeholder="Admin key" autocomplete="off">
+          <label class="poll-control" title="Browser auto-refresh interval in seconds">
+            <span>Auto</span>
+            <input id="clientRefreshSeconds" type="number" min="1" step="1" value="${escapeAttr(clientRefreshSeconds())}" inputmode="numeric">
+            <span>s</span>
+          </label>
           <button class="btn" data-action="refresh" title="Refresh data">Refresh</button>
           <button class="btn" data-action="add-source" title="Add source">+ Source</button>
           <button class="btn" data-action="export" title="Export layout JSON">Export</button>
@@ -569,7 +578,7 @@
               <input name="rootPath" data-wizard value="${escapeAttr(form.rootPath)}" placeholder="servers">
             </div>
             <div class="field">
-              <label>Poll seconds</label>
+              <label>Cache seconds</label>
               <input name="refreshSeconds" data-wizard value="${escapeAttr(form.refreshSeconds)}" inputmode="numeric">
             </div>
 
@@ -1155,6 +1164,12 @@
       sessionStorage.setItem("eq2dash:adminKey", state.adminKey);
       return;
     }
+    if (event.target.id === "clientRefreshSeconds") {
+      state.config.clientRefreshSeconds = secondsInput(event.target.value, 30);
+      if (state.editMode) state.dirty = true;
+      startClientPolling();
+      return;
+    }
     if (event.target.matches("[data-transform-field]")) {
       updateTransformValue(event.target);
       return;
@@ -1212,6 +1227,7 @@
     await loadSourceData();
     toast("Dashboard refreshed.");
     render();
+    startClientPolling();
   }
 
   async function enterEditMode() {
@@ -1230,6 +1246,7 @@
     await loadConfig();
     await loadSourceData();
     render();
+    startClientPolling();
   }
 
   async function saveSharedConfig() {
@@ -1247,6 +1264,7 @@
     await loadSourceData();
     toast("Shared dashboard saved.");
     render();
+    startClientPolling();
   }
 
   function openSourceDrawer(sourceId = null) {
@@ -1500,6 +1518,37 @@
     const config = JSON.parse(text);
     state.config = config;
     await saveSharedConfig();
+  }
+
+  function startClientPolling() {
+    stopClientPolling();
+    if (!state.config) return;
+    const seconds = clientRefreshSeconds();
+    state.pollTimer = setTimeout(runClientPoll, seconds * 1000);
+  }
+
+  function stopClientPolling() {
+    if (state.pollTimer) clearTimeout(state.pollTimer);
+    state.pollTimer = null;
+  }
+
+  async function runClientPoll() {
+    state.pollTimer = null;
+    if (!state.config) return;
+    if (state.polling || state.editMode || state.drawer) {
+      startClientPolling();
+      return;
+    }
+    state.polling = true;
+    try {
+      await loadSourceData();
+      render();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      state.polling = false;
+      startClientPolling();
+    }
   }
 
   function saveDashboard() {
@@ -1999,6 +2048,18 @@
     }, value);
   }
 
+  function clientRefreshSeconds() {
+    if (!state.config) return 30;
+    state.config.clientRefreshSeconds = secondsInput(state.config.clientRefreshSeconds, 30);
+    return state.config.clientRefreshSeconds;
+  }
+
+  function secondsInput(value, fallback = 30) {
+    const seconds = Number(value ?? fallback);
+    if (!Number.isFinite(seconds)) return fallback;
+    return Math.max(1, Math.floor(seconds));
+  }
+
   function parseJsonInput(value, label, fallback = {}) {
     const text = String(value || "").trim();
     if (!text) return fallback;
@@ -2022,6 +2083,7 @@
     return {
       version: 1,
       theme: config.theme || "dark",
+      clientRefreshSeconds: secondsInput(config.clientRefreshSeconds, 30),
       dashboards: (config.dashboards || []).map((dash) => ({
         id: dash.id,
         name: dash.name,
@@ -2034,7 +2096,7 @@
         name: source.name,
         type: source.type,
         enabled: source.enabled !== false,
-        refreshSeconds: Number(source.refreshSeconds || 30),
+        refreshSeconds: secondsInput(source.refreshSeconds, 30),
         config: source.config || {},
         mapping: source.mapping || {},
         createdAt: source.createdAt,

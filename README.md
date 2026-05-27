@@ -66,6 +66,8 @@ Do not put private source URLs, API keys, passwords, or personal machine paths i
 - HTML scraping uses backend CSS selectors, so it avoids browser CORS limits.
 - Static JSON/CSV and manual sources are stored centrally in SQLite.
 - WebSocket sources connect from the backend and buffer recent events.
+- The browser polls for fresh dashboard data using the top-bar `Auto` interval, defaulting to 30 seconds.
+- Source `Cache seconds` controls how long the backend reuses a source snapshot before it fetches that source again, so multiple clients share one source response during that window.
 - Source mappings can include calculated field rules. A freshness rule can read an epoch or ISO timestamp, compare it to the current server time, set a target field such as `status`, and optionally write age fields such as `uptime: "1 minute ago"` and `lastResponseSeconds: 60`.
 
 ## Useful API

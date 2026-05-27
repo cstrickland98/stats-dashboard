@@ -794,7 +794,18 @@ function getSnapshot(sourceId) {
   };
 }
 
+const refreshTasks = new Map();
+
 async function refreshSource(sourceId) {
+  if (refreshTasks.has(sourceId)) return refreshTasks.get(sourceId);
+  const task = refreshSourceNow(sourceId).finally(() =>
+    refreshTasks.delete(sourceId),
+  );
+  refreshTasks.set(sourceId, task);
+  return task;
+}
+
+async function refreshSourceNow(sourceId) {
   const source = db.prepare("SELECT * FROM sources WHERE id = ?").get(sourceId);
   if (!source || !source.enabled) return getSnapshot(sourceId);
   const mapping = parseJson(source.mapping_json, {});
@@ -839,6 +850,9 @@ function getConfig(options = {}) {
   const includeSecrets = Boolean(options.includeSecrets);
   const themeRow = db
     .prepare("SELECT value_json FROM settings WHERE key = 'theme'")
+    .get();
+  const clientRefreshRow = db
+    .prepare("SELECT value_json FROM settings WHERE key = 'clientRefreshSeconds'")
     .get();
   const sources = db
     .prepare("SELECT * FROM sources ORDER BY name")
@@ -895,6 +909,9 @@ function getConfig(options = {}) {
   return {
     version: 1,
     theme: parseJson(themeRow?.value_json, "dark"),
+    clientRefreshSeconds: secondsValue(
+      parseJson(clientRefreshRow?.value_json, 30),
+    ),
     dashboards,
     widgets,
     sources,
@@ -913,6 +930,12 @@ function requireAdmin(req, res, next) {
 
 function isAdminRequest(req) {
   return Boolean(ADMIN_KEY && req.get("X-Admin-Key") === ADMIN_KEY);
+}
+
+function secondsValue(value, fallback = 30) {
+  const seconds = Number(value ?? fallback);
+  if (!Number.isFinite(seconds)) return fallback;
+  return Math.max(1, Math.floor(seconds));
 }
 
 function saveConfig(config) {
@@ -936,6 +959,13 @@ function saveConfig(config) {
       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
     `,
     ).run(json(config.theme || "dark"), stamp);
+    db.prepare(
+      `
+      INSERT INTO settings (key, value_json, updated_at)
+      VALUES ('clientRefreshSeconds', ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+    `,
+    ).run(json(secondsValue(config.clientRefreshSeconds, 30)), stamp);
 
     db.prepare("DELETE FROM widgets").run();
     db.prepare("DELETE FROM dashboards").run();
@@ -975,8 +1005,9 @@ function saveConfig(config) {
         name: source.name || "Untitled source",
         type: source.type || "manual",
         enabled: source.enabled === false ? 0 : 1,
-        refreshSeconds: Number(
-          source.refreshSeconds || source.refresh_seconds || 30,
+        refreshSeconds: secondsValue(
+          source.refreshSeconds ?? source.refresh_seconds,
+          30,
         ),
         configJson,
         mappingJson: json(source.mapping || {}),
@@ -1019,12 +1050,6 @@ function saveConfig(config) {
   });
   tx();
 
-  const ids = sources.map((source) => source.id).filter(Boolean);
-  for (const id of ids) {
-    refreshSource(id).catch((error) =>
-      console.warn(`Failed to refresh ${id}:`, error.message),
-    );
-  }
 }
 
 function addActivity(sourceId, severity, message, payload = {}) {
@@ -1171,9 +1196,6 @@ function testWebSocket(url) {
 
 migrate();
 seedIfEmpty();
-refreshSource("eq2-sample").catch((error) =>
-  console.warn("Seed refresh failed:", error.message),
-);
 
 const app = express();
 app.disable("x-powered-by");
@@ -1232,7 +1254,7 @@ app.get("/api/sources/:id/data", async (req, res) => {
     return;
   }
   const snapshot = getSnapshot(source.id);
-  const staleMs = Number(source.refresh_seconds || 30) * 1000;
+  const staleMs = secondsValue(source.refresh_seconds, 30) * 1000;
   const isStale =
     !snapshot || Date.now() - Date.parse(snapshot.fetchedAt) > staleMs;
   const fresh = isStale ? await refreshSource(source.id) : snapshot;

@@ -152,7 +152,15 @@ button {
   gap: 6px;
 }
 
+.side-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
 .side-item {
+  flex: 1;
   min-height: 36px;
   border-radius: 8px;
   color: rgba(246, 240, 231, 0.84);
@@ -165,13 +173,53 @@ button {
   text-align: left;
 }
 
+.side-item.passive {
+  cursor: default;
+}
+
 .side-item.active,
 .side-item:hover {
   background: rgba(255, 255, 255, 0.08);
   color: var(--sidebar-text);
 }
 
+.side-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mini-action {
+  min-height: 28px;
+  border-radius: 7px;
+  padding: 0 7px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(246, 240, 231, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.mini-action:hover {
+  color: var(--sidebar-text);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.mini-action.danger {
+  color: #ffb8b4;
+}
+
+.empty-mini {
+  color: rgba(246, 240, 231, 0.52);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
 .source-chip {
+  flex: 1;
+  min-width: 0;
   display: grid;
   grid-template-columns: 10px minmax(0, 1fr);
   gap: 8px;
@@ -248,6 +296,16 @@ button {
   padding: 0 10px;
 }
 
+.admin-key {
+  width: 132px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink);
+  padding: 0 10px;
+}
+
 .btn {
   min-height: 36px;
   border-radius: 8px;
@@ -276,6 +334,11 @@ button {
   color: #161817;
   background: var(--accent);
   border-color: transparent;
+}
+
+.btn.danger {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 50%, var(--line));
 }
 
 .btn.ghost {
@@ -621,6 +684,19 @@ button {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.check-field {
+  justify-content: end;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.check-field input {
+  width: 18px;
+  height: 18px;
 }
 
 .field.full {

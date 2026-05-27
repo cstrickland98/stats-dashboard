@@ -7,11 +7,13 @@
     sourceData: {},
     events: [],
     selectedDashboard: sessionStorage.getItem("eq2dash:selectedDashboard") || "",
+    adminKey: sessionStorage.getItem("eq2dash:adminKey") || "",
     search: "",
     editMode: false,
     dirty: false,
     drawer: null,
     wizard: createWizard(),
+    editor: null,
     toasts: [],
     charts: new Map()
   };
@@ -53,12 +55,9 @@
     }
   }
 
-  async function loadConfig() {
-    state.config = await api("/api/config");
-    if (!state.selectedDashboard || !state.config.dashboards.some((dash) => dash.id === state.selectedDashboard)) {
-      state.selectedDashboard = state.config.dashboards[0]?.id || "";
-      sessionStorage.setItem("eq2dash:selectedDashboard", state.selectedDashboard);
-    }
+  async function loadConfig(admin = false) {
+    state.config = await api("/api/config", admin ? { admin: true } : {});
+    normalizeSelectedDashboard();
   }
 
   async function loadSourceData() {
@@ -97,19 +96,27 @@
     const contentType = response.headers.get("content-type") || "";
     const body = contentType.includes("application/json") ? await response.json() : await response.text();
     if (!response.ok) {
-      if (response.status === 401) sessionStorage.removeItem("eq2dash:adminKey");
+      if (response.status === 401) {
+        state.adminKey = "";
+        sessionStorage.removeItem("eq2dash:adminKey");
+      }
       throw new Error(typeof body === "string" ? body : body.error || "Request failed.");
     }
     return body;
   }
 
   function getAdminKey() {
-    let key = sessionStorage.getItem("eq2dash:adminKey");
+    let key = state.adminKey || sessionStorage.getItem("eq2dash:adminKey");
     if (!key) {
-      key = window.prompt("Admin key");
+      try {
+        key = window.prompt("Admin key");
+      } catch {
+        key = "";
+      }
       if (!key) throw new Error("Admin key required.");
-      sessionStorage.setItem("eq2dash:adminKey", key);
     }
+    state.adminKey = key;
+    sessionStorage.setItem("eq2dash:adminKey", key);
     return key;
   }
 
@@ -139,6 +146,7 @@
   function renderSidebar(dashboard) {
     const dashboards = state.config.dashboards || [];
     const sources = state.config.sources || [];
+    const presets = state.config.presets || [];
     return `
       <aside class="sidebar">
         <div class="brand">
@@ -156,11 +164,19 @@
           </div>
           <div class="side-list">
             ${dashboards.map((dash) => `
-              <button class="side-item ${dash.id === dashboard?.id ? "active" : ""}" data-dashboard="${escapeAttr(dash.id)}">
-                <span class="status-dot up"></span>
-                <span>${escapeHtml(dash.name)}</span>
-              </button>
-            `).join("")}
+              <div class="side-row">
+                <button class="side-item ${dash.id === dashboard?.id ? "active" : ""}" data-dashboard="${escapeAttr(dash.id)}">
+                  <span class="status-dot up"></span>
+                  <span>${escapeHtml(dash.name)}</span>
+                </button>
+                ${state.editMode ? `
+                  <div class="side-actions">
+                    <button class="mini-action" data-edit-dashboard="${escapeAttr(dash.id)}" title="Edit dashboard">Edit</button>
+                    <button class="mini-action danger" data-remove-dashboard="${escapeAttr(dash.id)}" title="Remove dashboard">Remove</button>
+                  </div>
+                ` : ""}
+              </div>
+            `).join("") || `<div class="empty-mini">No dashboards</div>`}
           </div>
         </section>
 
@@ -173,17 +189,50 @@
             ${sources.map((source) => {
               const snapshot = state.sourceData[source.id] || source.snapshot || {};
               return `
-                <div class="source-chip">
-                  <span class="status-dot ${snapshot.status === "ok" ? "up" : snapshot.status === "error" ? "down" : ""}"></span>
-                  <div>
-                    <strong>${escapeHtml(source.name)}</strong>
-                    <span>${escapeHtml(source.type)} / ${escapeHtml(snapshot.status || "pending")}</span>
+                <div class="side-row">
+                  <div class="source-chip">
+                    <span class="status-dot ${snapshot.status === "ok" ? "up" : snapshot.status === "error" ? "down" : ""}"></span>
+                    <div>
+                      <strong>${escapeHtml(source.name)}</strong>
+                      <span>${escapeHtml(source.type)} / ${source.enabled === false ? "disabled" : escapeHtml(snapshot.status || "pending")}</span>
+                    </div>
                   </div>
+                  ${state.editMode ? `
+                    <div class="side-actions">
+                      <button class="mini-action" data-edit-source="${escapeAttr(source.id)}" title="Edit source">Edit</button>
+                      <button class="mini-action danger" data-remove-source="${escapeAttr(source.id)}" title="Remove source">Remove</button>
+                    </div>
+                  ` : ""}
                 </div>
               `;
             }).join("") || `<div class="source-chip"><span class="status-dot"></span><div><strong>No sources</strong><span>Add one to start tracking.</span></div></div>`}
           </div>
         </section>
+
+        ${(presets.length || state.editMode) ? `
+          <section class="side-section">
+            <div class="side-heading">
+              <span>Presets</span>
+              <button class="btn small ghost" data-action="save-preset" title="Save preset">+</button>
+            </div>
+            <div class="side-list">
+              ${presets.map((preset) => `
+                <div class="side-row">
+                  <div class="side-item passive">
+                    <span class="status-dot"></span>
+                    <span>${escapeHtml(preset.name)}</span>
+                  </div>
+                  ${state.editMode ? `
+                    <div class="side-actions">
+                      <button class="mini-action" data-edit-preset="${escapeAttr(preset.id)}" title="Edit preset">Edit</button>
+                      <button class="mini-action danger" data-remove-preset="${escapeAttr(preset.id)}" title="Remove preset">Remove</button>
+                    </div>
+                  ` : ""}
+                </div>
+              `).join("") || `<div class="empty-mini">No presets</div>`}
+            </div>
+          </section>
+        ` : ""}
       </aside>
     `;
   }
@@ -197,6 +246,7 @@
         </div>
         <div class="toolbar">
           <input class="search" id="searchBox" type="search" value="${escapeAttr(state.search)}" placeholder="Search servers or widgets">
+          <input class="admin-key" id="adminKey" type="password" value="${escapeAttr(state.adminKey)}" placeholder="Admin key" autocomplete="off">
           <button class="btn" data-action="refresh" title="Refresh data">Refresh</button>
           <button class="btn" data-action="add-source" title="Add source">+ Source</button>
           <button class="btn" data-action="export" title="Export layout JSON">Export</button>
@@ -204,6 +254,7 @@
           <input hidden id="importFile" type="file" accept="application/json,.json">
           <button class="btn" data-action="theme" title="Toggle shared theme">Theme</button>
           ${state.editMode ? `
+            <button class="btn" data-action="edit-dashboard" title="Edit current dashboard">Dashboard</button>
             <button class="btn" data-action="add-widget" title="Add widget">+ Widget</button>
             <button class="btn" data-action="save-preset" title="Save preset">Preset</button>
             <button class="btn accent" data-action="save" title="Save shared layout">Save</button>
@@ -219,7 +270,7 @@
   function renderEditNotice() {
     return `
       <div class="notice">
-        <span>Editing shared dashboard config. Drag widget headers to move, use the lower-right corner to resize, then save.</span>
+        <span>Editing shared config. Sources, dashboards, widgets, presets, layout, and advanced JSON changes publish when you save.</span>
         <button class="btn small ghost" data-action="clear-admin">Clear admin key</button>
       </div>
     `;
@@ -248,7 +299,10 @@
           <h3>${escapeHtml(widget.title)}</h3>
           <div class="widget-meta">
             ${compactHeader ? "" : `<span>${escapeHtml(source?.name || "No source")}</span>`}
-            ${state.editMode ? `<button class="btn small ghost" data-remove-widget="${escapeAttr(widget.id)}" title="Remove widget">Remove</button>` : ""}
+            ${state.editMode ? `
+              <button class="btn small ghost" data-edit-widget="${escapeAttr(widget.id)}" title="Configure widget">Edit</button>
+              <button class="btn small ghost" data-remove-widget="${escapeAttr(widget.id)}" title="Remove widget">Remove</button>
+            ` : ""}
           </div>
         </div>
         <div class="widget-body">
@@ -430,6 +484,9 @@
 
   function renderDrawer() {
     if (state.drawer === "source") return renderSourceDrawer();
+    if (state.drawer === "dashboard") return renderDashboardDrawer();
+    if (state.drawer === "widget") return renderWidgetDrawer();
+    if (state.drawer === "preset") return renderPresetDrawer();
     if (state.drawer === "palette") return renderPaletteDrawer();
     return "";
   }
@@ -437,18 +494,26 @@
   function renderSourceDrawer() {
     const form = state.wizard.form;
     const type = form.type || "json-rest";
+    const isEdit = state.wizard.mode === "edit";
+    const enabled = form.enabled !== false && form.enabled !== "false";
     return `
       <section class="drawer" role="dialog" aria-modal="true">
         <div class="drawer-panel">
           <div class="drawer-head">
             <div>
-              <h2>Add a data source</h2>
-              <p>Sources, mappings, and uploaded data are saved centrally on the server.</p>
+              <h2>${isEdit ? "Edit data source" : "Add a data source"}</h2>
+              <p>Sources, mappings, uploaded data, and advanced JSON are saved centrally on the server.</p>
             </div>
             <button class="btn" data-action="close-drawer">Close</button>
           </div>
 
           <div class="form-grid">
+            ${isEdit ? `
+              <div class="field full">
+                <label>Source ID</label>
+                <input value="${escapeAttr(state.wizard.sourceId)}" disabled>
+              </div>
+            ` : ""}
             <div class="field">
               <label>Source type</label>
               <select name="type" data-wizard>
@@ -459,6 +524,10 @@
               <label>Name</label>
               <input name="name" data-wizard value="${escapeAttr(form.name)}" placeholder="EQ2 server status">
             </div>
+            <label class="field check-field">
+              <span>Enabled</span>
+              <input type="checkbox" name="enabled" data-wizard ${enabled ? "checked" : ""}>
+            </label>
 
             ${renderSourceFields(type, form)}
 
@@ -487,13 +556,28 @@
               <label>Population field</label>
               <input name="fieldPopulation" data-wizard value="${escapeAttr(form.fieldPopulation)}" placeholder="population">
             </div>
+            <div class="field">
+              <label>Last restart field</label>
+              <input name="fieldLastRestart" data-wizard value="${escapeAttr(form.fieldLastRestart)}" placeholder="lastRestart">
+            </div>
+            <div class="field full">
+              <label>Advanced config JSON</label>
+              <textarea name="configJson" data-wizard spellcheck="false">${escapeHtml(form.configJson)}</textarea>
+            </div>
+            <div class="field full">
+              <label>Advanced mapping JSON</label>
+              <textarea name="mappingJson" data-wizard spellcheck="false">${escapeHtml(form.mappingJson)}</textarea>
+            </div>
           </div>
 
           ${renderTestResult()}
 
           <div class="drawer-actions">
-            <button class="btn" data-action="test-source">Test source</button>
             <div>
+              ${isEdit ? `<button class="btn danger" data-action="remove-source" title="Remove source">Remove source</button>` : ""}
+            </div>
+            <div>
+              <button class="btn" data-action="test-source">Test source</button>
               <button class="btn" data-action="close-drawer">Cancel</button>
               <button class="btn accent" data-action="save-source">Save source</button>
             </div>
@@ -579,6 +663,167 @@
     `;
   }
 
+  function renderDashboardDrawer() {
+    const form = state.editor?.form || {};
+    const isEdit = state.editor?.mode === "edit";
+    return `
+      <section class="drawer" role="dialog" aria-modal="true">
+        <div class="drawer-panel">
+          <div class="drawer-head">
+            <div>
+              <h2>${isEdit ? "Edit dashboard" : "Add dashboard"}</h2>
+              <p>Dashboards group widgets and control the title and description shown in the workspace.</p>
+            </div>
+            <button class="btn" data-action="close-drawer">Close</button>
+          </div>
+          <div class="form-grid">
+            ${isEdit ? `
+              <div class="field full">
+                <label>Dashboard ID</label>
+                <input value="${escapeAttr(state.editor.id)}" disabled>
+              </div>
+            ` : ""}
+            <div class="field full">
+              <label>Name</label>
+              <input name="name" data-editor value="${escapeAttr(form.name)}" placeholder="Server operations">
+            </div>
+            <div class="field full">
+              <label>Description</label>
+              <textarea name="description" data-editor>${escapeHtml(form.description)}</textarea>
+            </div>
+          </div>
+          <div class="drawer-actions">
+            <div>
+              ${isEdit ? `<button class="btn danger" data-action="remove-dashboard" title="Remove dashboard">Remove dashboard</button>` : ""}
+            </div>
+            <div>
+              <button class="btn" data-action="close-drawer">Cancel</button>
+              <button class="btn accent" data-action="save-dashboard">Save dashboard</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderWidgetDrawer() {
+    const form = state.editor?.form || {};
+    const dashboards = state.config.dashboards || [];
+    const sources = state.config.sources || [];
+    const selectedType = form.type || widgetTypes[0].type;
+    return `
+      <section class="drawer" role="dialog" aria-modal="true">
+        <div class="drawer-panel">
+          <div class="drawer-head">
+            <div>
+              <h2>Configure widget</h2>
+              <p>Choose the source, move the widget between dashboards, and edit renderer options directly.</p>
+            </div>
+            <button class="btn" data-action="close-drawer">Close</button>
+          </div>
+          <div class="form-grid">
+            <div class="field full">
+              <label>Widget ID</label>
+              <input value="${escapeAttr(state.editor?.id || "")}" disabled>
+            </div>
+            <div class="field">
+              <label>Widget type</label>
+              <select name="type" data-editor>
+                ${widgetTypes.map((item) => `<option value="${escapeAttr(item.type)}" ${item.type === selectedType ? "selected" : ""}>${escapeHtml(item.title)} (${escapeHtml(item.type)})</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label>Title</label>
+              <input name="title" data-editor value="${escapeAttr(form.title)}" placeholder="Widget title">
+            </div>
+            <div class="field">
+              <label>Dashboard</label>
+              <select name="dashboardId" data-editor>
+                ${dashboards.map((dash) => `<option value="${escapeAttr(dash.id)}" ${dash.id === form.dashboardId ? "selected" : ""}>${escapeHtml(dash.name)}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label>Source</label>
+              <select name="sourceId" data-editor>
+                <option value="" ${form.sourceId ? "" : "selected"}>No source</option>
+                ${sources.map((source) => `<option value="${escapeAttr(source.id)}" ${source.id === form.sourceId ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label>Grid X</label>
+              <input name="x" data-editor value="${escapeAttr(form.x)}" inputmode="numeric">
+            </div>
+            <div class="field">
+              <label>Grid Y</label>
+              <input name="y" data-editor value="${escapeAttr(form.y)}" inputmode="numeric">
+            </div>
+            <div class="field">
+              <label>Width</label>
+              <input name="w" data-editor value="${escapeAttr(form.w)}" inputmode="numeric">
+            </div>
+            <div class="field">
+              <label>Height</label>
+              <input name="h" data-editor value="${escapeAttr(form.h)}" inputmode="numeric">
+            </div>
+            <div class="field full">
+              <label>Options JSON</label>
+              <textarea name="optionsJson" data-editor spellcheck="false">${escapeHtml(form.optionsJson)}</textarea>
+            </div>
+            <div class="field full">
+              <label>Field config JSON</label>
+              <textarea name="fieldConfigJson" data-editor spellcheck="false">${escapeHtml(form.fieldConfigJson)}</textarea>
+            </div>
+          </div>
+          <div class="drawer-actions">
+            <button class="btn danger" data-action="remove-widget">Remove widget</button>
+            <div>
+              <button class="btn" data-action="close-drawer">Cancel</button>
+              <button class="btn accent" data-action="save-widget">Save widget</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderPresetDrawer() {
+    const form = state.editor?.form || {};
+    return `
+      <section class="drawer" role="dialog" aria-modal="true">
+        <div class="drawer-panel">
+          <div class="drawer-head">
+            <div>
+              <h2>Edit preset</h2>
+              <p>Presets store a named dashboard configuration snapshot.</p>
+            </div>
+            <button class="btn" data-action="close-drawer">Close</button>
+          </div>
+          <div class="form-grid">
+            <div class="field full">
+              <label>Preset ID</label>
+              <input value="${escapeAttr(state.editor?.id || "")}" disabled>
+            </div>
+            <div class="field full">
+              <label>Name</label>
+              <input name="name" data-editor value="${escapeAttr(form.name)}" placeholder="Preset name">
+            </div>
+            <div class="field full">
+              <label>Config JSON</label>
+              <textarea name="configJson" data-editor spellcheck="false">${escapeHtml(form.configJson)}</textarea>
+            </div>
+          </div>
+          <div class="drawer-actions">
+            <button class="btn danger" data-action="remove-preset">Remove preset</button>
+            <div>
+              <button class="btn" data-action="close-drawer">Cancel</button>
+              <button class="btn accent" data-action="save-preset-edit">Save preset</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
   function renderPaletteDrawer() {
     return `
       <section class="drawer" role="dialog" aria-modal="true">
@@ -586,7 +831,7 @@
           <div class="drawer-head">
             <div>
               <h2>Add a widget</h2>
-              <p>New widgets use the first source by default. Edit the exported JSON for advanced options.</p>
+              <p>Pick a renderer, then configure its source, layout, options, and field config.</p>
             </div>
             <button class="btn" data-action="close-drawer">Close</button>
           </div>
@@ -617,9 +862,51 @@
       return;
     }
 
+    const editDashboardButton = event.target.closest("[data-edit-dashboard]");
+    if (editDashboardButton) {
+      openDashboardDrawer(editDashboardButton.dataset.editDashboard);
+      return;
+    }
+
+    const removeDashboardButton = event.target.closest("[data-remove-dashboard]");
+    if (removeDashboardButton) {
+      removeDashboard(removeDashboardButton.dataset.removeDashboard);
+      return;
+    }
+
+    const editSourceButton = event.target.closest("[data-edit-source]");
+    if (editSourceButton) {
+      openSourceDrawer(editSourceButton.dataset.editSource);
+      return;
+    }
+
+    const removeSourceButton = event.target.closest("[data-remove-source]");
+    if (removeSourceButton) {
+      removeSource(removeSourceButton.dataset.removeSource);
+      return;
+    }
+
+    const editWidgetButton = event.target.closest("[data-edit-widget]");
+    if (editWidgetButton) {
+      openWidgetDrawer(editWidgetButton.dataset.editWidget);
+      return;
+    }
+
     const removeButton = event.target.closest("[data-remove-widget]");
     if (removeButton) {
       removeWidget(removeButton.dataset.removeWidget);
+      return;
+    }
+
+    const editPresetButton = event.target.closest("[data-edit-preset]");
+    if (editPresetButton) {
+      openPresetDrawer(editPresetButton.dataset.editPreset);
+      return;
+    }
+
+    const removePresetButton = event.target.closest("[data-remove-preset]");
+    if (removePresetButton) {
+      removePreset(removePresetButton.dataset.removePreset);
       return;
     }
 
@@ -635,19 +922,27 @@
     const action = actionButton.dataset.action;
     try {
       if (action === "refresh") await refreshAll();
-      if (action === "edit") enterEditMode();
+      if (action === "edit") await enterEditMode();
       if (action === "save") await saveSharedConfig();
       if (action === "discard") await discardEdits();
       if (action === "add-source") openSourceDrawer();
       if (action === "close-drawer") closeDrawer();
       if (action === "test-source") await testSource();
-      if (action === "save-source") await saveSource();
+      if (action === "save-source") saveSource();
+      if (action === "remove-source") removeSource(state.wizard.sourceId);
       if (action === "theme") await toggleTheme();
       if (action === "export") await exportConfig();
       if (action === "import") document.getElementById("importFile")?.click();
-      if (action === "add-dashboard") await addDashboard();
+      if (action === "add-dashboard") openDashboardDrawer();
+      if (action === "edit-dashboard") openDashboardDrawer(currentDashboard()?.id);
+      if (action === "save-dashboard") saveDashboard();
+      if (action === "remove-dashboard") removeDashboard(state.editor?.id);
       if (action === "add-widget") openPalette();
+      if (action === "save-widget") saveWidget();
+      if (action === "remove-widget") removeWidget(state.editor?.id);
       if (action === "save-preset") await savePreset();
+      if (action === "save-preset-edit") savePresetEdit();
+      if (action === "remove-preset") removePreset(state.editor?.id);
       if (action === "clear-admin") clearAdminKey();
     } catch (error) {
       toast(error.message, "error");
@@ -663,12 +958,30 @@
       next?.setSelectionRange(state.search.length, state.search.length);
       return;
     }
+    if (event.target.id === "adminKey") {
+      state.adminKey = event.target.value;
+      sessionStorage.setItem("eq2dash:adminKey", state.adminKey);
+      return;
+    }
     if (event.target.matches("[data-wizard]")) {
-      state.wizard.form[event.target.name] = event.target.value;
+      updateFormValue(state.wizard.form, event.target);
+      return;
+    }
+    if (event.target.matches("[data-editor]")) {
+      updateFormValue(state.editor.form, event.target);
     }
   }
 
   async function onChange(event) {
+    if (event.target.matches("[data-wizard]")) {
+      updateFormValue(state.wizard.form, event.target);
+      if (event.target.name === "type") render();
+      return;
+    }
+    if (event.target.matches("[data-editor]")) {
+      updateFormValue(state.editor.form, event.target);
+      return;
+    }
     if (event.target.id === "sourceFile") {
       const file = event.target.files?.[0];
       if (file) {
@@ -692,8 +1005,9 @@
     render();
   }
 
-  function enterEditMode() {
-    getAdminKey();
+  async function enterEditMode() {
+    state.config = await api("/api/config", { admin: true });
+    normalizeSelectedDashboard();
     state.editMode = true;
     state.dirty = false;
     render();
@@ -702,6 +1016,8 @@
   async function discardEdits() {
     state.editMode = false;
     state.dirty = false;
+    state.drawer = null;
+    state.editor = null;
     await loadConfig();
     await loadSourceData();
     render();
@@ -716,26 +1032,99 @@
     state.config = saved;
     state.editMode = false;
     state.dirty = false;
+    state.drawer = null;
+    state.editor = null;
+    normalizeSelectedDashboard();
     await loadSourceData();
     toast("Shared dashboard saved.");
     render();
   }
 
-  function openSourceDrawer() {
+  function openSourceDrawer(sourceId = null) {
     getAdminKey();
+    state.editMode = true;
+    const source = sourceId ? (state.config.sources || []).find((item) => item.id === sourceId) : null;
+    if (sourceId && !source) throw new Error("Source not found.");
     state.drawer = "source";
-    state.wizard = createWizard();
+    state.editor = null;
+    state.wizard = createWizard(source);
+    state.wizard.mode = source ? "edit" : "add";
+    state.wizard.sourceId = source?.id || null;
+    render();
+  }
+
+  function openDashboardDrawer(dashboardId = null) {
+    getAdminKey();
+    state.editMode = true;
+    const dashboard = dashboardId ? (state.config.dashboards || []).find((item) => item.id === dashboardId) : null;
+    if (dashboardId && !dashboard) throw new Error("Dashboard not found.");
+    state.drawer = "dashboard";
+    state.editor = {
+      kind: "dashboard",
+      mode: dashboard ? "edit" : "add",
+      id: dashboard?.id || null,
+      form: {
+        name: dashboard?.name || "",
+        description: dashboard?.description || ""
+      }
+    };
+    render();
+  }
+
+  function openWidgetDrawer(widgetId) {
+    getAdminKey();
+    state.editMode = true;
+    const widget = findWidget(widgetId);
+    if (!widget) throw new Error("Widget not found.");
+    state.drawer = "widget";
+    state.editor = {
+      kind: "widget",
+      mode: "edit",
+      id: widget.id,
+      form: {
+        type: widget.type || widgetTypes[0].type,
+        title: widget.title || "",
+        dashboardId: widget.dashboardId || currentDashboard()?.id || "",
+        sourceId: widget.sourceId || "",
+        x: String(widget.layout?.x || 1),
+        y: String(widget.layout?.y || 1),
+        w: String(widget.layout?.w || 3),
+        h: String(widget.layout?.h || 2),
+        optionsJson: prettyJson(widget.options || {}),
+        fieldConfigJson: prettyJson(widget.fieldConfig || {})
+      }
+    };
+    render();
+  }
+
+  function openPresetDrawer(presetId) {
+    getAdminKey();
+    state.editMode = true;
+    const preset = (state.config.presets || []).find((item) => item.id === presetId);
+    if (!preset) throw new Error("Preset not found.");
+    state.drawer = "preset";
+    state.editor = {
+      kind: "preset",
+      mode: "edit",
+      id: preset.id,
+      form: {
+        name: preset.name || "",
+        configJson: prettyJson(preset.config || {})
+      }
+    };
     render();
   }
 
   function openPalette() {
     getAdminKey();
+    state.editMode = true;
     state.drawer = "palette";
     render();
   }
 
   function closeDrawer() {
     state.drawer = null;
+    state.editor = null;
     render();
   }
 
@@ -754,63 +1143,76 @@
     render();
   }
 
-  async function saveSource() {
+  function saveSource() {
     const payload = buildSourcePayload();
+    const existingIndex = (state.config.sources || []).findIndex((source) => source.id === state.wizard.sourceId);
     const source = {
-      id: uniqueSourceId(payload.name),
+      ...(existingIndex >= 0 ? state.config.sources[existingIndex] : {}),
+      id: existingIndex >= 0 ? state.config.sources[existingIndex].id : uniqueSourceId(payload.name),
       name: payload.name,
       type: payload.type,
-      enabled: true,
+      enabled: payload.enabled,
       refreshSeconds: Number(payload.refreshSeconds || 30),
       config: payload.config,
       mapping: payload.mapping
     };
-    state.config.sources.push(source);
+    state.config.sources = state.config.sources || [];
+    if (existingIndex >= 0) state.config.sources.splice(existingIndex, 1, source);
+    else state.config.sources.push(source);
     state.drawer = null;
-    await saveSharedConfig();
+    state.dirty = true;
+    render();
   }
 
   function buildSourcePayload() {
     const form = state.wizard.form;
     const type = form.type || "json-rest";
-    const config = {};
-    if (type === "json-rest") config.url = form.url.trim();
+    const text = (name) => String(form[name] || "").trim();
+    const rawConfig = parseJsonInput(form.configJson, "Advanced config JSON", {});
+    const rawMapping = parseJsonInput(form.mappingJson, "Advanced mapping JSON", {});
+    const generatedConfig = {};
+    if (type === "json-rest") generatedConfig.url = text("url");
     if (type === "html-scrape") {
-      config.url = form.url.trim();
-      config.rowSelector = form.rowSelector.trim();
-      config.selectors = {
-        name: form.nameSelector || ".name",
-        status: form.statusSelector || ".status",
-        uptime: form.uptimeSelector || ".uptime",
-        population: form.populationSelector || ".population"
+      generatedConfig.url = text("url");
+      generatedConfig.rowSelector = text("rowSelector");
+      generatedConfig.selectors = {
+        ...((rawConfig && rawConfig.selectors) || {}),
+        name: text("nameSelector") || ".name",
+        status: text("statusSelector") || ".status",
+        uptime: text("uptimeSelector") || ".uptime",
+        population: text("populationSelector") || ".population"
       };
     }
     if (type === "static-json" || type === "manual") {
-      config.contentType = "json";
-      config.content = form.content || "{}";
+      generatedConfig.contentType = "json";
+      generatedConfig.content = form.content || "{}";
     }
     if (type === "static-csv") {
-      config.contentType = "csv";
-      config.content = form.content || "";
+      generatedConfig.contentType = "csv";
+      generatedConfig.content = form.content || "";
     }
     if (type === "websocket") {
-      config.url = form.url.trim();
-      config.messageField = form.messageField.trim();
+      generatedConfig.url = text("url");
+      generatedConfig.messageField = text("messageField");
     }
+    const mappingFields = {
+      ...((rawMapping && rawMapping.fields) || {}),
+      name: text("fieldName") || "name",
+      status: text("fieldStatus") || "status",
+      uptime: text("fieldUptime") || "uptime",
+      population: text("fieldPopulation") || "population",
+      lastRestart: text("fieldLastRestart") || "lastRestart"
+    };
     return {
       type,
-      name: form.name.trim() || sourceTypes.find(([value]) => value === type)?.[1] || "Untitled source",
+      name: text("name") || sourceTypes.find(([value]) => value === type)?.[1] || "Untitled source",
+      enabled: form.enabled !== false && form.enabled !== "false",
       refreshSeconds: Number(form.refreshSeconds || 30),
-      config,
+      config: { ...rawConfig, ...generatedConfig },
       mapping: {
-        rootPath: form.rootPath.trim(),
-        fields: {
-          name: form.fieldName.trim() || "name",
-          status: form.fieldStatus.trim() || "status",
-          uptime: form.fieldUptime.trim() || "uptime",
-          population: form.fieldPopulation.trim() || "population",
-          lastRestart: form.fieldLastRestart?.trim() || "lastRestart"
-        }
+        ...rawMapping,
+        rootPath: text("rootPath"),
+        fields: mappingFields
       }
     };
   }
@@ -840,29 +1242,52 @@
     await saveSharedConfig();
   }
 
-  async function addDashboard() {
-    getAdminKey();
-    const name = window.prompt("Dashboard name");
-    if (!name) return;
-    const id = uniqueId("dashboard", name);
-    state.config.dashboards.push({
-      id,
+  function saveDashboard() {
+    const form = state.editor?.form || {};
+    const name = String(form.name || "").trim() || "Untitled dashboard";
+    const dashboard = {
+      ...(state.editor?.id ? state.config.dashboards.find((item) => item.id === state.editor.id) : {}),
+      id: state.editor?.id || uniqueId("dashboard", name),
       name,
-      description: "Custom shared dashboard."
-    });
-    state.selectedDashboard = id;
-    sessionStorage.setItem("eq2dash:selectedDashboard", id);
-    await saveSharedConfig();
+      description: String(form.description || "").trim()
+    };
+    const index = (state.config.dashboards || []).findIndex((item) => item.id === dashboard.id);
+    state.config.dashboards = state.config.dashboards || [];
+    if (index >= 0) state.config.dashboards.splice(index, 1, dashboard);
+    else state.config.dashboards.push(dashboard);
+    state.selectedDashboard = dashboard.id;
+    sessionStorage.setItem("eq2dash:selectedDashboard", dashboard.id);
+    state.drawer = null;
+    state.editor = null;
+    state.dirty = true;
+    render();
+  }
+
+  function removeDashboard(id) {
+    if (!id) return;
+    const dashboard = (state.config.dashboards || []).find((item) => item.id === id);
+    if (!dashboard) return;
+    if (!window.confirm(`Remove dashboard "${dashboard.name}" and its widgets?`)) return;
+    state.config.dashboards = state.config.dashboards.filter((item) => item.id !== id);
+    state.config.widgets = (state.config.widgets || []).filter((widget) => widget.dashboardId !== id);
+    if (state.selectedDashboard === id) normalizeSelectedDashboard();
+    state.drawer = null;
+    state.editor = null;
+    state.dirty = true;
+    render();
   }
 
   function addWidget(type) {
     getAdminKey();
     const def = widgetTypes.find((item) => item.type === type) || widgetTypes[0];
     const dashboard = currentDashboard();
+    if (!dashboard) throw new Error("Add a dashboard before adding widgets.");
     const widgets = dashboardWidgets(dashboard.id);
     const y = widgets.reduce((max, widget) => Math.max(max, Number(widget.layout?.y || 1) + Number(widget.layout?.h || 2)), 1);
+    const id = uniqueId("widget", def.title);
+    state.config.widgets = state.config.widgets || [];
     state.config.widgets.push({
-      id: uniqueId("widget", def.title),
+      id,
       dashboardId: dashboard.id,
       type: def.type,
       title: def.title,
@@ -874,12 +1299,58 @@
     state.drawer = null;
     state.editMode = true;
     state.dirty = true;
+    openWidgetDrawer(id);
+  }
+
+  function saveWidget() {
+    const widget = findWidget(state.editor?.id);
+    if (!widget) throw new Error("Widget not found.");
+    const form = state.editor.form;
+    const type = form.type || widgetTypes[0].type;
+    const options = parseJsonInput(form.optionsJson, "Options JSON", {});
+    const fieldConfig = parseJsonInput(form.fieldConfigJson, "Field config JSON", {});
+    if (type === "map-overlay" && !options.image) options.image = "/assets/norrath-map.svg";
+    Object.assign(widget, {
+      type,
+      title: String(form.title || "").trim() || "Untitled widget",
+      dashboardId: form.dashboardId || currentDashboard()?.id || "",
+      sourceId: form.sourceId || null,
+      layout: {
+        x: clamp(Number(form.x || 1), 1, 12),
+        y: Math.max(1, Number(form.y || 1)),
+        w: clamp(Number(form.w || 3), 2, 12),
+        h: clamp(Number(form.h || 2), 2, 8)
+      },
+      options,
+      fieldConfig
+    });
+    state.drawer = null;
+    state.editor = null;
+    state.dirty = true;
     render();
   }
 
   function removeWidget(id) {
     getAdminKey();
+    if (!id) return;
     state.config.widgets = state.config.widgets.filter((widget) => widget.id !== id);
+    state.drawer = null;
+    state.editor = null;
+    state.dirty = true;
+    render();
+  }
+
+  function removeSource(id) {
+    getAdminKey();
+    const source = (state.config.sources || []).find((item) => item.id === id);
+    if (!source) return;
+    if (!window.confirm(`Remove source "${source.name}"? Widgets using it will switch to no source.`)) return;
+    state.config.sources = state.config.sources.filter((item) => item.id !== id);
+    for (const widget of state.config.widgets || []) {
+      if (widget.sourceId === id) widget.sourceId = null;
+    }
+    state.drawer = null;
+    state.editor = null;
     state.dirty = true;
     render();
   }
@@ -894,13 +1365,46 @@
       name,
       config: sanitizeConfig(state.config)
     });
-    await saveSharedConfig();
+    state.dirty = true;
+    render();
+  }
+
+  function savePresetEdit() {
+    const preset = (state.config.presets || []).find((item) => item.id === state.editor?.id);
+    if (!preset) throw new Error("Preset not found.");
+    const form = state.editor.form;
+    preset.name = String(form.name || "").trim() || "Untitled preset";
+    preset.config = parseJsonInput(form.configJson, "Config JSON", {});
+    state.drawer = null;
+    state.editor = null;
+    state.dirty = true;
+    render();
+  }
+
+  function removePreset(id) {
+    const preset = (state.config.presets || []).find((item) => item.id === id);
+    if (!preset) return;
+    if (!window.confirm(`Remove preset "${preset.name}"?`)) return;
+    state.config.presets = state.config.presets.filter((item) => item.id !== id);
+    state.drawer = null;
+    state.editor = null;
+    state.dirty = true;
+    render();
   }
 
   function clearAdminKey() {
+    state.adminKey = "";
     sessionStorage.removeItem("eq2dash:adminKey");
     toast("Admin key cleared.");
     render();
+  }
+
+  function normalizeSelectedDashboard() {
+    const dashboards = state.config?.dashboards || [];
+    if (!state.selectedDashboard || !dashboards.some((dash) => dash.id === state.selectedDashboard)) {
+      state.selectedDashboard = dashboards[0]?.id || "";
+      sessionStorage.setItem("eq2dash:selectedDashboard", state.selectedDashboard);
+    }
   }
 
   function currentDashboard() {
@@ -914,7 +1418,8 @@
   }
 
   function getSource(sourceId) {
-    return (state.config.sources || []).find((source) => source.id === sourceId) || state.config.sources?.[0] || null;
+    if (!sourceId) return null;
+    return (state.config.sources || []).find((source) => source.id === sourceId) || null;
   }
 
   function sourceRows(sourceId) {
@@ -1091,6 +1596,30 @@
     return `grid-column: ${x} / span ${w}; grid-row: ${y} / span ${h};`;
   }
 
+  function updateFormValue(form, target) {
+    if (!form || !target.name) return;
+    form[target.name] = target.type === "checkbox" ? target.checked : target.value;
+  }
+
+  function parseJsonInput(value, label, fallback = {}) {
+    const text = String(value || "").trim();
+    if (!text) return fallback;
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new Error(`${label} is not valid JSON: ${error.message}`);
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`${label} must be a JSON object.`);
+    }
+    return parsed;
+  }
+
+  function prettyJson(value) {
+    return JSON.stringify(value || {}, null, 2);
+  }
+
   function sanitizeConfig(config) {
     return {
       version: 1,
@@ -1136,28 +1665,36 @@
   }
 
   function findWidget(id) {
-    return state.config.widgets.find((widget) => widget.id === id);
+    return (state.config.widgets || []).find((widget) => widget.id === id);
   }
 
-  function createWizard() {
+  function createWizard(source = null) {
+    const config = source?.config || {};
+    const mapping = source?.mapping || {};
+    const fields = mapping.fields || {};
+    const selectors = config.selectors || {};
     return {
       form: {
-        type: "json-rest",
-        name: "",
-        url: "",
-        content: "{\n  \"servers\": []\n}",
-        rootPath: "servers",
-        refreshSeconds: "30",
-        fieldName: "name",
-        fieldStatus: "status",
-        fieldUptime: "uptime",
-        fieldPopulation: "population",
-        rowSelector: "",
-        nameSelector: "",
-        statusSelector: "",
-        uptimeSelector: "",
-        populationSelector: "",
-        messageField: "message"
+        type: source?.type || "json-rest",
+        name: source?.name || "",
+        enabled: source?.enabled !== false,
+        url: config.url || "",
+        content: config.content || "{\n  \"servers\": []\n}",
+        rootPath: mapping.rootPath || "servers",
+        refreshSeconds: String(source?.refreshSeconds || 30),
+        fieldName: fields.name || "name",
+        fieldStatus: fields.status || "status",
+        fieldUptime: fields.uptime || "uptime",
+        fieldPopulation: fields.population || "population",
+        fieldLastRestart: fields.lastRestart || "lastRestart",
+        rowSelector: config.rowSelector || "",
+        nameSelector: selectors.name || "",
+        statusSelector: selectors.status || "",
+        uptimeSelector: selectors.uptime || "",
+        populationSelector: selectors.population || "",
+        messageField: config.messageField || "message",
+        configJson: prettyJson(config),
+        mappingJson: prettyJson(mapping)
       },
       test: null
     };

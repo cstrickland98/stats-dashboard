@@ -51,13 +51,14 @@ Do not put private source URLs, API keys, passwords, or personal machine paths i
 
 1. Open the dashboard URL.
 2. View the seeded `EQ2 sample server status` dashboard.
-3. Click `Edit` and enter the admin key when prompted.
+3. Enter the admin key in the top bar, then click `Edit`.
 4. Use `+ Source` to add JSON REST, HTML scrape, static JSON/CSV, WebSocket, or manual data.
-5. Test the source, map fields such as `name`, `status`, `uptime`, and `population`, then save.
-6. Use `+ Widget` in edit mode to add tiles such as status tables, KPIs, charts, feeds, gauges, heatmaps, or map overlays.
-7. Drag widget headers to rearrange tiles and resize from the lower-right corner.
-8. Click `Save` to publish the shared layout for everyone.
-9. Use `Export` and `Import` to back up or move dashboard JSON.
+5. Test the source, map fields such as `name`, `status`, `uptime`, and `population`, then save the source locally.
+6. Use sidebar edit/remove controls to change or delete dashboards, sources, and presets.
+7. Use `+ Widget` in edit mode to add tiles, then use each widget's `Edit` button to pick its source, dashboard, layout, options JSON, and field config JSON.
+8. Drag widget headers to rearrange tiles and resize from the lower-right corner.
+9. Click `Save` to publish the shared layout for everyone.
+10. Use `Export` and `Import` to back up or move dashboard JSON.
 
 ## Source Notes
 

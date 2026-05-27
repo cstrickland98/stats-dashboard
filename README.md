@@ -1,13 +1,12 @@
-# EQ2 Stats Dashboard
+# Stats Dashboard
 
-Shared stats and tracking dashboard for the EQ2EMU team. V1 focuses on EverQuest II server status, uptime, and activity, but the app is built around configurable sources, field mappings, widgets, and shared layouts.
+Shared stats and tracking dashboard. The app is built around configurable sources, field mappings, widgets, and shared layouts.
 
 ## Install
 
 Requirements:
 
 - Node.js 20 or newer
-- One machine/server that everyone can reach on the network
 
 Install dependencies:
 
